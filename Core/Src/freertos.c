@@ -51,12 +51,11 @@ extern TIM_HandleTypeDef htim10;
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
-
+volatile unsigned long ulHighFrequencyTimerTicks;
 /* USER CODE END Variables */
 osThreadId defaultTaskHandle;
 osThreadId task_AHandle;
 osTimerId softwareTimer1Handle;
-volatile unsigned long ulHighFrequencyTimerTicks;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -180,7 +179,7 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadCreate(osThread(defaultTask), NULL);
 
   /* definition and creation of task_A */
-  osThreadDef(task_A, StartTask_A, osPriorityIdle, 0, 128);
+  osThreadDef(task_A, StartTask_A, osPriorityIdle, 0, 256);
   task_AHandle = osThreadCreate(osThread(task_A), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
@@ -223,12 +222,16 @@ void StartTask_A(void const * argument)
   /* USER CODE BEGIN StartTask_A */
 	//define variables
 	uint16_t raw_data;
-	char msg[10];
 	int ADCVolt_raw;
 	int ADCTemp_raw;
 	int ADCVoltRef_raw;
-	//float ADCVolt;
-	//float ADCTemp;
+
+	// calculate TEMP const.
+	float Vsense;
+	float Temp;
+	const float V25=0.76;	// V
+	const float Avg_Slope=2.5; // mV/C
+	const float VRefint=1.21; //V
 
   /* Infinite loop */
   for(;;)
@@ -246,7 +249,14 @@ void StartTask_A(void const * argument)
 	ADCVoltRef_raw = HAL_ADC_GetValue(&hadc1);	// RANK 3
 
 	HAL_ADC_Stop(&hadc1);
-	printf("ADCVolt_raw: %d  ADCTemp_raw: %d  VoltRef: %d \r\n",ADCVolt_raw,ADCTemp_raw,ADCVoltRef_raw);
+	//printf("ADCVolt_raw: %d  ADCTemp_raw: %d  VoltRef: %d \r\n",ADCVolt_raw,ADCTemp_raw,ADCVoltRef_raw);
+
+	// calculate TEMP
+
+	Vsense=(ADCTemp_raw/4096.0)*VRefint;
+	Temp=((Vsense-V25)/Avg_Slope)+25.0;
+
+	printf("Calculated temp: %f \r\n",Temp);
     osDelay(1000);
   }
   /* USER CODE END StartTask_A */
