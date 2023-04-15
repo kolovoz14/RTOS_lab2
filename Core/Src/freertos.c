@@ -37,6 +37,8 @@
 /* USER CODE BEGIN PD */
 //for debuging
 extern UART_HandleTypeDef huart2;
+extern ADC_HandleTypeDef hadc1;
+extern DMA_HandleTypeDef hdma_adc1;
 
 
 /* USER CODE END PD */
@@ -199,7 +201,7 @@ void StartDefaultTask(void const * argument)
   {
     osDelay(1000);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
-    printf("UART TEST: char: %c int: %d float: %f \r\n", 'a',46,4.543);
+//    printf("UART TEST: char: %c int: %d float: %f \r\n", 'a',46,4.543);
   }
   /* USER CODE END StartDefaultTask */
 }
@@ -214,10 +216,33 @@ void StartDefaultTask(void const * argument)
 void StartTask_A(void const * argument)
 {
   /* USER CODE BEGIN StartTask_A */
+	//define variables
+	uint16_t raw_data;
+	char msg[10];
+	int ADCVolt_raw;
+	int ADCTemp_raw;
+	int ADCVoltRef_raw;
+	//float ADCVolt;
+	//float ADCTemp;
+
   /* Infinite loop */
   for(;;)
   {
-    osDelay(1);
+	//printf("task_A\r\n");
+	HAL_ADC_Start(&hadc1);
+
+	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+	ADCTemp_raw = HAL_ADC_GetValue(&hadc1);	// RANK 1
+
+	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+	ADCVolt_raw = HAL_ADC_GetValue(&hadc1);	// RANK 2
+
+	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+	ADCVoltRef_raw = HAL_ADC_GetValue(&hadc1);	// RANK 3
+
+	HAL_ADC_Stop(&hadc1);
+	printf("ADCVolt_raw: %d  ADCTemp_raw: %d  VoltRef: %d \r\n",ADCVolt_raw,ADCTemp_raw,ADCVoltRef_raw);
+    osDelay(1000);
   }
   /* USER CODE END StartTask_A */
 }
@@ -228,7 +253,25 @@ void softwareTimer1Callback(void const * argument)
   /* USER CODE BEGIN softwareTimer1Callback */
 	//read adc
 	//send data from temp sensor
-
+//	float ADCVolt;
+//	float ADCTemp;
+//	HAL_ADC_Start(&hadc1);
+//
+//	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+//	ADCVolt = HAL_ADC_GetValue(&hadc1);
+//
+//	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+//	ADCTemp = HAL_ADC_GetValue(&hadc);
+//
+//	printf("ADCVolt: %f",ADCVolt);
+//	HAL_ADC_Stop(&hadc1);
+	//DMA
+//	float ADCVolt=0;
+//	HAL_ADC_Start(&hdma_adc1);
+//	HAL_ADC_PollForConversion(&hdma_adc1, HAL_MAX_DELAY);
+//	ADCVolt = HAL_ADC_GetValue(&hdma_adc1);
+//	printf("DMA ADCVolt: %f",ADCVolt);
+//	HAL_ADC_Stop(&hdma_adc1);
 	//float temp_sensor=-300.0;
 	//putchar(temp_sensor);
 
