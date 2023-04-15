@@ -39,6 +39,7 @@
 extern UART_HandleTypeDef huart2;
 extern ADC_HandleTypeDef hadc1;
 extern DMA_HandleTypeDef hdma_adc1;
+extern TIM_HandleTypeDef htim10;
 
 
 /* USER CODE END PD */
@@ -55,6 +56,7 @@ extern DMA_HandleTypeDef hdma_adc1;
 osThreadId defaultTaskHandle;
 osThreadId task_AHandle;
 osTimerId softwareTimer1Handle;
+volatile unsigned long ulHighFrequencyTimerTicks;
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -93,12 +95,14 @@ void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName);
 /* Functions needed when configGENERATE_RUN_TIME_STATS is on */
 __weak void configureTimerForRunTimeStats(void)
 {
-
+	ulHighFrequencyTimerTicks = 0;
+	HAL_TIM_Base_Start_IT(&htim10);
 }
 
 __weak unsigned long getRunTimeCounterValue(void)
 {
-return 0;
+//return 0;
+	return ulHighFrequencyTimerTicks;
 //return HAL_GetTick();
 //return xTaskGetTickCount();
 }
@@ -199,6 +203,7 @@ void StartDefaultTask(void const * argument)
   /* Infinite loop */
   for(;;)
   {
+	int arr[100];
     osDelay(1000);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
 //    printf("UART TEST: char: %c int: %d float: %f \r\n", 'a',46,4.543);
