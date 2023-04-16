@@ -35,12 +35,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-//for debuging
 extern UART_HandleTypeDef huart2;
 extern ADC_HandleTypeDef hadc1;
 extern DMA_HandleTypeDef hdma_adc1;
 extern TIM_HandleTypeDef htim10;
-
+extern DAC_HandleTypeDef hdac;
 
 /* USER CODE END PD */
 
@@ -55,6 +54,7 @@ volatile unsigned long ulHighFrequencyTimerTicks;
 /* USER CODE END Variables */
 osThreadId defaultTaskHandle;
 osThreadId task_AHandle;
+osThreadId genAnalogSigHandle;
 osTimerId softwareTimer1Handle;
 
 /* Private function prototypes -----------------------------------------------*/
@@ -75,6 +75,7 @@ PUTCHAR_PROTOTYPE
 
 void StartDefaultTask(void const * argument);
 void StartTask_A(void const * argument);
+void StartGenAnalogSig(void const * argument);
 void softwareTimer1Callback(void const * argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
@@ -182,6 +183,10 @@ void MX_FREERTOS_Init(void) {
   osThreadDef(task_A, StartTask_A, osPriorityIdle, 0, 256);
   task_AHandle = osThreadCreate(osThread(task_A), NULL);
 
+  /* definition and creation of genAnalogSig */
+  osThreadDef(genAnalogSig, StartGenAnalogSig, osPriorityIdle, 0, 128);
+  genAnalogSigHandle = osThreadCreate(osThread(genAnalogSig), NULL);
+
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -221,10 +226,8 @@ void StartTask_A(void const * argument)
 {
   /* USER CODE BEGIN StartTask_A */
 	//define variables
-	uint16_t raw_data;
 	int ADCVolt_raw;
 	int ADCTemp_raw;
-	int ADCVoltRef_raw;
 
 	// calculate TEMP const.
 	float Vsense;
@@ -245,21 +248,50 @@ void StartTask_A(void const * argument)
 	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
 	ADCVolt_raw = HAL_ADC_GetValue(&hadc1);	// RANK 2
 
-	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-	ADCVoltRef_raw = HAL_ADC_GetValue(&hadc1);	// RANK 3
-
 	HAL_ADC_Stop(&hadc1);
-	//printf("ADCVolt_raw: %d  ADCTemp_raw: %d  VoltRef: %d \r\n",ADCVolt_raw,ADCTemp_raw,ADCVoltRef_raw);
+	printf("ADCVolt_raw: %d  ADCTemp_raw: %d  \r\n",ADCVolt_raw,ADCTemp_raw);
 
 	// calculate TEMP
-
 	Vsense=(ADCTemp_raw/4096.0)*VRefint;
 	Temp=((Vsense-V25)/Avg_Slope)+25.0;
+
+
 
 	printf("Calculated temp: %f \r\n",Temp);
     osDelay(1000);
   }
   /* USER CODE END StartTask_A */
+}
+
+/* USER CODE BEGIN Header_StartGenAnalogSig */
+/**
+* @brief Function implementing the genAnalogSig thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartGenAnalogSig */
+void StartGenAnalogSig(void const * argument)
+{
+  /* USER CODE BEGIN StartGenAnalogSig */
+	float analogValue=0;
+	int digitalValue=0;
+	const float Vref=3.3;
+	const float deltaTime=(2*3.1416)/10;
+	float time=0;
+	const int frequency=30;
+	HAL_DAC_Start(&hdac, DAC_CHANNEL_1);
+  /* Infinite loop */
+  for(;;)
+  {
+	analogValue=0.3*sin(time)+0.5;	// Volts
+	digitalValue=(analogValue*4096.0)/Vref;
+	HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, digitalValue);
+	time=time+deltaTime;
+	if(time>2*3.1416) time=0;
+    osDelay(100/frequency);
+
+  }
+  /* USER CODE END StartGenAnalogSig */
 }
 
 /* softwareTimer1Callback function */
