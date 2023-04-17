@@ -38,10 +38,22 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
 
+//struct ADC_reading
+//{
+//	uint16_t temp;
+//	uint16_t voltage;
+//};
+union ADC_reading
+{
+	uint16_t word[2];
+	uint32_t all_data;
+};
+
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
 /* USER CODE BEGIN EC */
+
 
 /* USER CODE END EC */
 

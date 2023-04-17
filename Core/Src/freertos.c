@@ -35,12 +35,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-extern UART_HandleTypeDef huart2;
-extern ADC_HandleTypeDef hadc1;
-extern DMA_HandleTypeDef hdma_adc1;
-extern TIM_HandleTypeDef htim10;
-extern DAC_HandleTypeDef hdac;
-
+#define QUEUE_DATA_LEN 10
+#define ADC_BUFFER_LEN 1024
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -50,11 +46,43 @@ extern DAC_HandleTypeDef hdac;
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+
+extern UART_HandleTypeDef huart2;
+extern ADC_HandleTypeDef hadc1;
+extern DMA_HandleTypeDef hdma_adc1;
+extern TIM_HandleTypeDef htim10;
+extern DAC_HandleTypeDef hdac;
+
 volatile unsigned long ulHighFrequencyTimerTicks;
+//volatile uint16_t ADC_results[2];
+//const int ADC_channel_count=sizeof(ADC_results)/sizeof(ADC_results[0]);
+//volatile ADC_conversion_completed=0;
+
+volatile union ADC_reading ADC_readings_buffer[ADC_BUFFER_LEN];
+union ADC_reading ADC_readings[QUEUE_DATA_LEN];
+//struct ADC_reading ADC_reading_data;
+union ADC_reading ADC_reading_data;
+
+volatile int buffer_half_full;
+volatile int buffer_full;
+
+int ADCVolt_raw;
+int ADCTemp_raw;
+
+int USE_DMA=0;
+
+// calculate TEMP const.
+float Vsense;
+float Temp;
+const float V25=0.76;	// V
+const float Avg_Slope=2.5; // mV/C
+const float VRefint=1.21; //V
+
 /* USER CODE END Variables */
 osThreadId defaultTaskHandle;
 osThreadId task_AHandle;
 osThreadId genAnalogSigHandle;
+osMessageQId ADC_queueHandle;
 osTimerId softwareTimer1Handle;
 
 /* Private function prototypes -----------------------------------------------*/
@@ -101,11 +129,72 @@ __weak void configureTimerForRunTimeStats(void)
 
 __weak unsigned long getRunTimeCounterValue(void)
 {
-//return 0;
 	return ulHighFrequencyTimerTicks;
-//return HAL_GetTick();
-//return xTaskGetTickCount();
 }
+
+//HAL_ADC
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc1)
+{
+	buffer_full=1;
+}
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc1)
+{
+	buffer_half_full=1;
+}
+
+void read_ADC_and_send_mess()
+{
+	HAL_ADC_Start(&hadc1);
+
+	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+	ADCTemp_raw = HAL_ADC_GetValue(&hadc1);	// RANK 1
+
+	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+	ADCVolt_raw = HAL_ADC_GetValue(&hadc1);	// RANK 2
+
+	HAL_ADC_Stop(&hadc1);
+
+	//send data to queue
+	printf("TIMER: ADCTemp_raw: %d  ADCVolt_raw: %d  \r\n",ADCTemp_raw,ADCVolt_raw);
+	ADC_reading_data.word[0]=ADCTemp_raw;
+	ADC_reading_data.word[1]=ADCVolt_raw;
+
+	osMessagePut(ADC_queueHandle,ADC_reading_data.all_data, 5);
+}
+
+void get_ADC_data_from_queue(union ADC_reading* ADC_reading_queue)
+{
+	for(int i=0;i<QUEUE_DATA_LEN;i++)
+		{
+			osEvent mess_event=osMessageGet(ADC_queueHandle,100);
+			//printf("message status %d",mess_event.status);
+			if(mess_event.status==0x10)	// message
+			{
+				ADC_reading_queue[i].all_data=mess_event.value.v;
+				//printf("ADCTemp_raw: %d  ADCVolt_raw: %d  \r\n",temps[i],voltages[i]);
+			}
+			else printf("msg error");
+			ADC_reading_queue[i].all_data=0;
+		}
+}
+
+
+float calculate_average_temp(union ADC_reading* ADC_reading_queue)
+{
+	uint32_t temp_sum=0;
+	for(int i=0;i<QUEUE_DATA_LEN;i++)
+	{
+			temp_sum=temp_sum+ADC_reading_queue[i].word[0];
+	}
+
+	float mean_temp=temp_sum/QUEUE_DATA_LEN;
+
+	Vsense=(mean_temp/4096.0)*VRefint;
+	Temp=((Vsense-V25)/Avg_Slope)+25.0;
+
+	return Temp;
+}
+
 /* USER CODE END 1 */
 
 /* USER CODE BEGIN 4 */
@@ -151,6 +240,9 @@ void vApplicationGetTimerTaskMemory( StaticTask_t **ppxTimerTaskTCBBuffer, Stack
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
 
+	//start DMA
+	if(USE_DMA) HAL_ADC_Start_DMA(&hadc1, (uint32_t*) ADC_readings_buffer, ADC_BUFFER_LEN);
+
   /* USER CODE END Init */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -168,9 +260,16 @@ void MX_FREERTOS_Init(void) {
 
   /* USER CODE BEGIN RTOS_TIMERS */
   /* start timers, add new ones, ... */
+  osTimerStart(softwareTimer1Handle, 10);	//runs every 10 ms
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* definition and creation of ADC_queue */
+  osMessageQDef(ADC_queue, 16, uint32_t);
+  ADC_queueHandle = osMessageCreate(osMessageQ(ADC_queue), NULL);
+
   /* USER CODE BEGIN RTOS_QUEUES */
+
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
 
@@ -207,7 +306,6 @@ void StartDefaultTask(void const * argument)
   /* Infinite loop */
   for(;;)
   {
-	int arr[100];
     osDelay(1000);
     HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
 //    printf("UART TEST: char: %c int: %d float: %f \r\n", 'a',46,4.543);
@@ -225,39 +323,19 @@ void StartDefaultTask(void const * argument)
 void StartTask_A(void const * argument)
 {
   /* USER CODE BEGIN StartTask_A */
-	//define variables
-	int ADCVolt_raw;
-	int ADCTemp_raw;
 
-	// calculate TEMP const.
-	float Vsense;
-	float Temp;
-	const float V25=0.76;	// V
-	const float Avg_Slope=2.5; // mV/C
-	const float VRefint=1.21; //V
+	//HAL_ADC_Start_DMA(&hadc1, (uint32_t*) ADC_readings_buffer, ADC_BUFFER_LEN); //start DMA
+	//define variables
+	// QUEUE
 
   /* Infinite loop */
   for(;;)
   {
-	//printf("task_A\r\n");
-	HAL_ADC_Start(&hadc1);
+	// QUEUE
+	get_ADC_data_from_queue(ADC_readings);
 
-	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-	ADCTemp_raw = HAL_ADC_GetValue(&hadc1);	// RANK 1
-
-	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-	ADCVolt_raw = HAL_ADC_GetValue(&hadc1);	// RANK 2
-
-	HAL_ADC_Stop(&hadc1);
-	printf("ADCVolt_raw: %d  ADCTemp_raw: %d  \r\n",ADCVolt_raw,ADCTemp_raw);
-
-	// calculate TEMP
-	Vsense=(ADCTemp_raw/4096.0)*VRefint;
-	Temp=((Vsense-V25)/Avg_Slope)+25.0;
-
-
-
-	printf("Calculated temp: %f \r\n",Temp);
+	float average_temp=calculate_average_temp(ADC_readings);
+	printf("Calculated temp: %f \r\n",average_temp);
     osDelay(1000);
   }
   /* USER CODE END StartTask_A */
@@ -297,31 +375,24 @@ void StartGenAnalogSig(void const * argument)
 /* softwareTimer1Callback function */
 void softwareTimer1Callback(void const * argument)
 {
+	//version 2 with DMA
   /* USER CODE BEGIN softwareTimer1Callback */
-	//read adc
-	//send data from temp sensor
-//	float ADCVolt;
-//	float ADCTemp;
-//	HAL_ADC_Start(&hadc1);
-//
-//	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-//	ADCVolt = HAL_ADC_GetValue(&hadc1);
-//
-//	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-//	ADCTemp = HAL_ADC_GetValue(&hadc);
-//
-//	printf("ADCVolt: %f",ADCVolt);
-//	HAL_ADC_Stop(&hadc1);
-	//DMA
-//	float ADCVolt=0;
-//	HAL_ADC_Start(&hdma_adc1);
-//	HAL_ADC_PollForConversion(&hdma_adc1, HAL_MAX_DELAY);
-//	ADCVolt = HAL_ADC_GetValue(&hdma_adc1);
-//	printf("DMA ADCVolt: %f",ADCVolt);
-//	HAL_ADC_Stop(&hdma_adc1);
-	//float temp_sensor=-300.0;
-	//putchar(temp_sensor);
 
+	// get data from channels
+	//HAL_ADC_Start(&hadc1);
+	//HAL_ADC_Start_DMA(&hadc1, (uint32_t*) ADC_readings_buffer, ADC_BUFFER_LEN);
+//	while(buffer_full==0)
+//	{
+//		//wait until buffer is full
+//	}
+	//HAL_ADC_Stop(&hadc1);
+	//HAL_ADC_Stop_DMA(&hadc1);
+	//buffer_half_full=0;
+	//buffer_full=0;
+
+
+// version 1 with queue
+	read_ADC_and_send_mess();
 
   /* USER CODE END softwareTimer1Callback */
 }
