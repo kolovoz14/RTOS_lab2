@@ -35,7 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define QUEUE_DATA_LEN 10
+#define QUEUE_DATA_LEN 16
 #define ADC_BUFFER_LEN 1024
 /* USER CODE END PD */
 
@@ -155,7 +155,7 @@ void read_ADC_and_send_mess()
 	HAL_ADC_Stop(&hadc1);
 
 	//send data to queue
-	printf("TIMER: ADCTemp_raw: %d  ADCVolt_raw: %d  \r\n",ADCTemp_raw,ADCVolt_raw);
+	//printf("TIMER: ADCTemp_raw: %d  ADCVolt_raw: %d  \r\n",ADCTemp_raw,ADCVolt_raw);
 	ADC_reading_data.word[0]=ADCTemp_raw;
 	ADC_reading_data.word[1]=ADCVolt_raw;
 
@@ -171,10 +171,12 @@ void get_ADC_data_from_queue(union ADC_reading* ADC_reading_queue)
 			if(mess_event.status==0x10)	// message
 			{
 				ADC_reading_queue[i].all_data=mess_event.value.v;
-				//printf("ADCTemp_raw: %d  ADCVolt_raw: %d  \r\n",temps[i],voltages[i]);
 			}
-			else printf("msg error");
+			else
+			{
+			printf("msg error");
 			ADC_reading_queue[i].all_data=0;
+			}
 		}
 }
 
@@ -184,11 +186,11 @@ float calculate_average_temp(union ADC_reading* ADC_reading_queue)
 	uint32_t temp_sum=0;
 	for(int i=0;i<QUEUE_DATA_LEN;i++)
 	{
-			temp_sum=temp_sum+ADC_reading_queue[i].word[0];
+			temp_sum=temp_sum+(uint32_t)ADC_reading_queue[i].word[0];
 	}
 
-	float mean_temp=temp_sum/QUEUE_DATA_LEN;
-
+	float mean_temp=(float)temp_sum/(float)QUEUE_DATA_LEN;
+	//printf("temp sum: %d \r\n",temp_sum);
 	Vsense=(mean_temp/4096.0)*VRefint;
 	Temp=((Vsense-V25)/Avg_Slope)+25.0;
 
