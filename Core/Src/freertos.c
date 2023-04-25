@@ -35,7 +35,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define QUEUE_DATA_LEN 16
+#define ADC_QUEUE_LEN 16
 #define ADC_BUFFER_LEN 1024
 /* USER CODE END PD */
 
@@ -51,6 +51,7 @@ extern UART_HandleTypeDef huart2;
 extern ADC_HandleTypeDef hadc1;
 extern DMA_HandleTypeDef hdma_adc1;
 extern TIM_HandleTypeDef htim10;
+extern TIM_HandleTypeDef htim8;
 extern DAC_HandleTypeDef hdac;
 
 volatile unsigned long ulHighFrequencyTimerTicks;
@@ -59,17 +60,17 @@ volatile unsigned long ulHighFrequencyTimerTicks;
 //volatile ADC_conversion_completed=0;
 
 volatile union ADC_reading ADC_readings_buffer[ADC_BUFFER_LEN];
-union ADC_reading ADC_readings[QUEUE_DATA_LEN];
-//struct ADC_reading ADC_reading_data;
+union ADC_reading ADC_readings_queue[ADC_QUEUE_LEN];
 union ADC_reading ADC_reading_data;
 
-volatile int buffer_half_full;
-volatile int buffer_full;
+volatile int buffer_half_full=0;
+volatile int buffer_full=0;
+BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
 int ADCVolt_raw;
 int ADCTemp_raw;
 
-int USE_DMA=0;
+int USE_DMA=1;
 
 // calculate TEMP const.
 float Vsense;
@@ -133,13 +134,17 @@ __weak unsigned long getRunTimeCounterValue(void)
 }
 
 //HAL_ADC
-void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc1)
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 {
 	buffer_full=1;
+	printf("DMA full \r\n");
+	vTaskNotifyGiveFromISR(task_AHandle,&xHigherPriorityTaskWoken);
 }
-void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc1)
+void HAL_ADC_ConvHalfCpltCallback(ADC_HandleTypeDef* hadc)
 {
 	buffer_half_full=1;
+	printf("DMA half-full \r\n");
+	vTaskNotifyGiveFromISR(task_AHandle,&xHigherPriorityTaskWoken);
 }
 
 void read_ADC_and_send_mess()
@@ -164,7 +169,7 @@ void read_ADC_and_send_mess()
 
 void get_ADC_data_from_queue(union ADC_reading* ADC_reading_queue)
 {
-	for(int i=0;i<QUEUE_DATA_LEN;i++)
+	for(int i=0;i<ADC_QUEUE_LEN;i++)
 		{
 			osEvent mess_event=osMessageGet(ADC_queueHandle,100);
 			//printf("message status %d",mess_event.status);
@@ -181,16 +186,17 @@ void get_ADC_data_from_queue(union ADC_reading* ADC_reading_queue)
 }
 
 
-float calculate_average_temp(union ADC_reading* ADC_reading_queue)
+float calculate_average_temp(union ADC_reading* ADC_reading_queue,int reading_length)
 {
 	uint32_t temp_sum=0;
-	for(int i=0;i<QUEUE_DATA_LEN;i++)
+	for(int i=0;i<reading_length;i++)
 	{
 			temp_sum=temp_sum+(uint32_t)ADC_reading_queue[i].word[0];
 	}
 
-	float mean_temp=(float)temp_sum/(float)QUEUE_DATA_LEN;
+	float mean_temp=(float)temp_sum/(float)reading_length;
 	//printf("temp sum: %d \r\n",temp_sum);
+	//printf("mean_temp: %f \r\n",mean_temp);
 	Vsense=(mean_temp/4096.0)*VRefint;
 	Temp=((Vsense-V25)/Avg_Slope)+25.0;
 
@@ -242,8 +248,14 @@ void vApplicationGetTimerTaskMemory( StaticTask_t **ppxTimerTaskTCBBuffer, Stack
 void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN Init */
 
+	// start timer
+	HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_2);
+	//HAL_TIMEx_PWMN_Start_DMA(&htim8, Channe2, pData, Length)
 	//start DMA
-	if(USE_DMA) HAL_ADC_Start_DMA(&hadc1, (uint32_t*) ADC_readings_buffer, ADC_BUFFER_LEN);
+	if(USE_DMA)
+	{
+		HAL_ADC_Start_DMA(&hadc1, (uint32_t*) ADC_readings_buffer, ADC_BUFFER_LEN);
+	}
 
   /* USER CODE END Init */
 
@@ -325,8 +337,6 @@ void StartDefaultTask(void const * argument)
 void StartTask_A(void const * argument)
 {
   /* USER CODE BEGIN StartTask_A */
-
-	//HAL_ADC_Start_DMA(&hadc1, (uint32_t*) ADC_readings_buffer, ADC_BUFFER_LEN); //start DMA
 	//define variables
 	// QUEUE
 
@@ -334,11 +344,37 @@ void StartTask_A(void const * argument)
   for(;;)
   {
 	// QUEUE
-	get_ADC_data_from_queue(ADC_readings);
+	float average_temp=0;
+	if(!USE_DMA)
+	{
+		get_ADC_data_from_queue(ADC_readings_queue);
+		average_temp=calculate_average_temp(ADC_readings_queue,ADC_QUEUE_LEN);
+		printf("Calculated temp: %f \r\n",average_temp);
+		osDelay(1000);
+	}
+	else
+	{
+		//wait for the interupt
+		ulTaskNotifyTake(pdTRUE,(TickType_t) portMAX_DELAY);
+		if(buffer_full) //read second half
+		{
+			average_temp=calculate_average_temp(ADC_readings_buffer+ADC_BUFFER_LEN/2,ADC_BUFFER_LEN/2);
+			buffer_full=0;
+			printf("Calculated temp: %f \r\n",average_temp);
+		}
+		else if(buffer_half_full)	//read first half
+		{
+			average_temp=calculate_average_temp(ADC_readings_buffer,ADC_BUFFER_LEN/2);
+			buffer_half_full=0;
+			printf("Calculated temp: %f \r\n",average_temp);
+		}
+		else
+		{
+			printf("empty buffer");
+		}
+		//printf("Calculated temp: %f \r\n",average_temp);
+	}
 
-	float average_temp=calculate_average_temp(ADC_readings);
-	printf("Calculated temp: %f \r\n",average_temp);
-    osDelay(1000);
   }
   /* USER CODE END StartTask_A */
 }
@@ -377,24 +413,11 @@ void StartGenAnalogSig(void const * argument)
 /* softwareTimer1Callback function */
 void softwareTimer1Callback(void const * argument)
 {
-	//version 2 with DMA
   /* USER CODE BEGIN softwareTimer1Callback */
-
-	// get data from channels
-	//HAL_ADC_Start(&hadc1);
-	//HAL_ADC_Start_DMA(&hadc1, (uint32_t*) ADC_readings_buffer, ADC_BUFFER_LEN);
-//	while(buffer_full==0)
-//	{
-//		//wait until buffer is full
-//	}
-	//HAL_ADC_Stop(&hadc1);
-	//HAL_ADC_Stop_DMA(&hadc1);
-	//buffer_half_full=0;
-	//buffer_full=0;
 
 
 // version 1 with queue
-	read_ADC_and_send_mess();
+	if(!USE_DMA) read_ADC_and_send_mess();
 
   /* USER CODE END softwareTimer1Callback */
 }
